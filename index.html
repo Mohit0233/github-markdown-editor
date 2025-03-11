@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub Markdown Preview with Monaco Editor</title>
+
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='black'/><text x='50%' y='60%' font-size='60' fill='white' font-family='Arial' font-weight='bold' text-anchor='middle'>M</text></svg>">
+
+    <!-- External CSS with caching -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-dark.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github-dark.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+    <!-- External JS with caching -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.40.0/min/vs/loader.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+    <style>
+        /* Base Styles */
+        body {
+            display: flex;
+            height: 100vh;
+            margin: 0;
+            background-color: #0d1117;
+            color: white;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+
+        /* Layout Containers */
+        .editor-container,
+        .markdown-container {
+            padding: 4px 0;
+            height: 100vh;
+            overflow: auto;
+            position: relative;
+        }
+
+        .editor-container {
+            width: 50%;
+            min-width: 20%;
+        }
+
+        .markdown-container {
+            width: 50%;
+            min-width: 20%;
+            background-color: #0d1117;
+        }
+
+        /* Resizer Element */
+        .resizer {
+            width: 5px;
+            background: #444;
+            cursor: ew-resize;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Markdown Display */
+        .markdown-body {
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        /* Copy Button */
+        .sticky-copy {
+            float: right;
+            position: sticky;
+            top: 10px;
+            display: block;
+            width: fit-content;
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(12px) saturate(180%);
+            -webkit-backdrop-filter: blur(12px) saturate(180%);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            cursor: pointer;
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-weight: bold;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+            transition: background 0.2s, transform 0.1s;
+            margin: 10px;
+        }
+
+        /* Code Blocks */
+        pre {
+            background: #161b22;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+
+        code {
+            font-family: monospace;
+        }
+
+        /* Editor */
+        #editor {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+<div class="editor-container">
+    <div id="editor"></div>
+</div>
+<div class="resizer" id="resizer"></div>
+<div class="markdown-container" id="markdown-container">
+    <button class="sticky-copy" id="copy-button">
+        <svg id="copy-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+    </button>
+    <div id="markdown-output" class="markdown-body markdown-body-dark" tabindex="0"></div>
+</div>
+
+<script>
+    // Global variables
+    let editor;
+
+    // Initialize the application when DOM is loaded
+    document.addEventListener('DOMContentLoaded', function() {
+        initMonacoEditor();
+        setupEventListeners();
+    });
+
+    // Initialize Monaco Editor
+    function initMonacoEditor() {
+        require.config({
+            paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.40.0/min/vs' },
+            // Add cache busting configuration
+            urlArgs: "bust=" + (new Date()).getTime()
+        });
+
+        require(['vs/editor/editor.main'], function() {
+            createEditor();
+        });
+    }
+
+    // Create Monaco Editor instance
+    function createEditor() {
+        editor = monaco.editor.create(document.getElementById('editor'), {
+            value: getSavedContent(),
+            language: 'markdown',
+            theme: 'vs-dark',
+            automaticLayout: true
+        });
+
+        // Set up content change listener
+        editor.getModel().onDidChangeContent(updateMarkdown);
+
+        // Initial render
+        updateMarkdown();
+    }
+
+    // Get saved content from localStorage
+    function getSavedContent() {
+        return localStorage.getItem('markdownContent') || '';
+    }
+
+    // Update markdown preview
+    function updateMarkdown() {
+        const markdownText = editor.getValue();
+        saveContent(markdownText);
+        renderMarkdown(markdownText);
+    }
+
+    // Save content to localStorage
+    function saveContent(content) {
+        localStorage.setItem('markdownContent', content);
+    }
+
+    // Render markdown content to HTML
+    function renderMarkdown(markdownText) {
+        const html = marked.parse(markdownText);
+        document.getElementById('markdown-output').innerHTML = html;
+        highlightCodeBlocks();
+    }
+
+    // Apply syntax highlighting to code blocks
+    function highlightCodeBlocks() {
+        document.querySelectorAll('pre code').forEach((block) => {
+            hljs.highlightElement(block);
+        });
+    }
+
+    // Copy markdown content to clipboard
+    function copyMarkdown() {
+        const markdownText = editor.getValue();
+        navigator.clipboard.writeText(markdownText)
+            .then(() => updateCopyButton(true))
+            .catch(err => {
+                console.error('Failed to copy:', err);
+                updateCopyButton(false);
+            });
+    }
+
+    // Update copy button icon
+    function updateCopyButton(success) {
+        const copyIcon = document.getElementById('copy-icon');
+
+        if (success) {
+            // Show checkmark
+            copyIcon.innerHTML = `<polyline points="20 6 9 17 4 12"></polyline>`;
+
+            // Reset after timeout
+            setTimeout(() => {
+                copyIcon.innerHTML = `
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    `;
+            }, 300);
+        }
+    }
+
+    // Handle panel resizing
+    function initResizer() {
+        const resizer = document.getElementById('resizer');
+        const leftPanel = document.querySelector('.editor-container');
+        const rightPanel = document.querySelector('.markdown-container');
+        let isResizing = false;
+
+        resizer.addEventListener('mousedown', startResize);
+
+        function startResize(event) {
+            isResizing = true;
+            document.addEventListener('mousemove', resize);
+            document.addEventListener('mouseup', stopResize);
+        }
+
+        function resize(event) {
+            if (!isResizing) return;
+
+            const totalWidth = window.innerWidth;
+            const newLeftWidth = (event.clientX / totalWidth) * 100;
+            const newRightWidth = 100 - newLeftWidth;
+
+            // Prevent panels from becoming too small
+            if (newLeftWidth > 20 && newRightWidth > 20) {
+                leftPanel.style.width = `${newLeftWidth}%`;
+                rightPanel.style.width = `${newRightWidth}%`;
+            }
+        }
+
+        function stopResize() {
+            isResizing = false;
+            document.removeEventListener('mousemove', resize);
+            document.removeEventListener('mouseup', stopResize);
+        }
+    }
+
+    // Setup keyboard shortcuts for markdown preview
+    function setupKeyboardShortcuts() {
+        document.getElementById('markdown-output').addEventListener('keydown', function(e) {
+            // Handle Cmd+A / Ctrl+A for select all
+            if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+                e.preventDefault();
+                selectAllContent(this);
+            }
+        });
+    }
+
+    // Select all content in an element
+    function selectAllContent(element) {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+    }
+
+    // Set up all event listeners
+    function setupEventListeners() {
+        // Click events
+        document.getElementById('copy-button').addEventListener('click', copyMarkdown);
+        document.getElementById('markdown-container').addEventListener('click', function() {
+            document.getElementById('markdown-output').focus();
+        });
+
+        // Initialize resizer functionality
+        initResizer();
+
+        // Setup keyboard shortcuts
+        setupKeyboardShortcuts();
+    }
+</script>
+</body>
+</html>
