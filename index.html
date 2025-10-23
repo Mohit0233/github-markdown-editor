@@ -28,6 +28,10 @@
             }
         };
     </script>
+    <!-- Local storage helpers -->
+    <script src="local-storate.js"></script>
+    <!-- App utilities -->
+    <script src="app.js"></script>
 
     <link rel="stylesheet" href="styles.css" />
 </head>
@@ -87,140 +91,7 @@
         updateMarkdown();
         // Install enhanced markdown paste handler
         installMarkdownPasteHandler(editor);
-
     }
-
-    // Get saved content from localStorage
-    function getSavedContent() {
-        return localStorage.getItem('markdownContent') || '';
-    }
-
-    // Update markdown preview
-    function updateMarkdown() {
-        const markdownText = editor.getValue();
-        saveContent(markdownText);
-        renderMarkdown(markdownText);
-    }
-
-    // Save content to localStorage
-    function saveContent(content) {
-        localStorage.setItem('markdownContent', content);
-    }
-
-    // Render markdown content to HTML
-    function renderMarkdown(markdownText) {
-        const html = marked.parse(markdownText);
-        document.getElementById('markdown-output').innerHTML = html;
-        highlightCodeBlocks();
-    }
-
-    // Apply syntax highlighting to code blocks
-    function highlightCodeBlocks() {
-        document.querySelectorAll('pre code').forEach((block) => {
-            hljs.highlightElement(block);
-        });
-    }
-
-    // Copy markdown content to clipboard
-    function copyMarkdown() {
-        const markdownText = editor.getValue();
-        navigator.clipboard.writeText(markdownText)
-            .then(() => updateCopyButton(true))
-            .catch(err => {
-                console.error('Failed to copy:', err);
-                updateCopyButton(false);
-            });
-    }
-
-    // Update copy button icon
-    function updateCopyButton(success) {
-        const copyIcon = document.getElementById('copy-icon');
-
-        if (success) {
-            // Show checkmark
-            copyIcon.innerHTML = `<polyline points="20 6 9 17 4 12"></polyline>`;
-
-            // Reset after timeout
-            setTimeout(() => {
-                copyIcon.innerHTML = `
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    `;
-            }, 300);
-        }
-    }
-
-    // Handle panel resizing
-    function initResizer() {
-        const resizer = document.getElementById('resizer');
-        const leftPanel = document.querySelector('.editor-container');
-        const rightPanel = document.querySelector('.markdown-container');
-        let isResizing = false;
-
-        resizer.addEventListener('mousedown', startResize);
-
-        function startResize(event) {
-            isResizing = true;
-            document.addEventListener('mousemove', resize);
-            document.addEventListener('mouseup', stopResize);
-        }
-
-        function resize(event) {
-            if (!isResizing) return;
-
-            const totalWidth = window.innerWidth;
-            const newLeftWidth = (event.clientX / totalWidth) * 100;
-            const newRightWidth = 100 - newLeftWidth;
-
-            // Prevent panels from becoming too small
-            if (newLeftWidth > 20 && newRightWidth > 20) {
-                leftPanel.style.width = `${newLeftWidth}%`;
-                rightPanel.style.width = `${newRightWidth}%`;
-            }
-        }
-
-        function stopResize() {
-            isResizing = false;
-            document.removeEventListener('mousemove', resize);
-            document.removeEventListener('mouseup', stopResize);
-        }
-    }
-
-    // Setup keyboard shortcuts for markdown preview
-    function setupKeyboardShortcuts() {
-        document.getElementById('markdown-output').addEventListener('keydown', function(e) {
-            // Handle Cmd+A / Ctrl+A for select all
-            if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
-                e.preventDefault();
-                selectAllContent(this);
-            }
-        });
-    }
-
-    // Select all content in an element
-    function selectAllContent(element) {
-        const range = document.createRange();
-        range.selectNodeContents(element);
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
-    }
-
-    // Set up all event listeners
-    function setupEventListeners() {
-        // Click events
-        document.getElementById('copy-button').addEventListener('click', copyMarkdown);
-        document.getElementById('markdown-container').addEventListener('click', function() {
-            document.getElementById('markdown-output').focus();
-        });
-
-        // Initialize resizer functionality
-        initResizer();
-
-        // Setup keyboard shortcuts
-        setupKeyboardShortcuts();
-    }
-
 
     /**
      * Install a robust capture-phase paste handler that:
