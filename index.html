@@ -15,6 +15,19 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.40.0/min/vs/loader.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://unpkg.com/turndown/dist/turndown.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+        // Configure Monaco environment before loading editor modules to avoid broken NLS worker paths.
+        window.MonacoEnvironment = {
+            globalAPI: true,
+            // Force English to prevent attempts to fetch localized nls bundles that 404
+            getWorkerUrl: function(moduleId, label) {
+                // Use data URL inline worker referencing monaco's workerMain
+                const workerSrc = `self.MonacoEnvironment={baseUrl:'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.40.0/min/'};importScripts('https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.40.0/min/vs/base/worker/workerMain.js');`;
+                return URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }));
+            }
+        };
+    </script>
 
     <link rel="stylesheet" href="styles.css" />
 </head>
@@ -72,6 +85,9 @@
 
         // Initial render
         updateMarkdown();
+        // Install enhanced markdown paste handler
+        installMarkdownPasteHandler(editor);
+
     }
 
     // Get saved content from localStorage
@@ -204,6 +220,168 @@
         // Setup keyboard shortcuts
         setupKeyboardShortcuts();
     }
+
+
+    /**
+     * Install a robust capture-phase paste handler that:
+     *  - Intercepts before Monaco default
+     *  - Extracts markdown/html/plain in that order
+     *  - Converts HTML -> Markdown with Turndown (if present)
+     *  - Optionally formats via formatMarkdownInline
+     *  - Inserts via executeEdits preserving undo/redo
+     */
+    function installMarkdownPasteHandler(editor) {
+        if (!editor) return;
+        const DEBUG = true;
+        const log = {
+            info: (...a) => console.info('[paste]', ...a),
+            warn: (...a) => console.warn('[paste]', ...a),
+            err:  (...a) => console.error('[paste]', ...a),
+            dbg:  (...a) => { if (DEBUG) console.debug('[paste]', ...a);}
+        };
+
+        let enabled = true; // future toggle
+        const container = editor.getContainerDomNode?.();
+        const domNode = editor.getDomNode?.();
+
+        // We will attach to: container, domNode, the hidden textarea (once it exists), and window (capture) as a last resort.
+        const attached = new Set();
+        const handlers = new Map();
+
+        function addTarget(t, label) {
+            if (!t || attached.has(t)) return;
+            const h = (ev) => corePasteHandler(ev, label);
+            t.addEventListener('paste', h, true); // capture
+            attached.add(t);
+            handlers.set(t, h);
+            log.info('listener attached ->', label);
+        }
+
+        function findHiddenTextarea() {
+            // Monaco uses textarea.inputarea inside the container
+            if (!container) return null;
+            return container.querySelector('textarea.inputarea');
+        }
+
+        // Core paste logic
+        const corePasteHandler = async (ev, targetLabel) => {
+            if (!enabled) return;
+            try {
+                const active = document.activeElement;
+                // Ensure focus is inside this editor (avoid intercepting other fields like the separate paste-box)
+                if (container && active && !container.contains(active)) {
+                    log.dbg('skip: active element outside editor', { targetLabel });
+                    return; // allow default for outside elements
+                }
+                const clipboard = ev.clipboardData || window.clipboardData;
+                if (!clipboard) { log.warn('no clipboardData object'); return; }
+                log.dbg('captured types from', targetLabel, clipboard.types);
+
+                // We'll take control only if there's HTML or markdown or plain text we can transform.
+                const hasUseful = (clipboard.types||[]).some(t => /text\/html|text\/markdown|text\/plain/i.test(t));
+                if (!hasUseful) { log.dbg('no useful types present, allowing default'); return; }
+
+                ev.stopImmediatePropagation();
+                ev.preventDefault();
+
+                let text = '';
+                let sourceType = '';
+
+                // Order: markdown -> html -> plain
+                if (clipboard.types?.includes('text/markdown')) {
+                    try { text = clipboard.getData('text/markdown'); } catch {}
+                    if (text) sourceType = 'markdown';
+                }
+                if (!text) {
+                    let html = '';
+                    try { html = clipboard.getData('text/html'); } catch {}
+                    if (html) {
+                        sourceType = 'html';
+                        if (typeof TurndownService !== 'undefined') {
+                            try {
+                                const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', emDelimiter: '_' });
+                                // Normalize some source patterns (Google Docs, etc.)
+                                html = html.replace(/<div([^>]*)>/gi, '<p$1>').replace(/<\/div>/gi, '</p>');
+                                // Remove meta/style/script for safety
+                                html = html.replace(/<(script|style|meta)[^>]*>[\s\S]*?<\/\1>/gi, '');
+                                text = td.turndown(html);
+                            } catch (e) {
+                                log.warn('Turndown conversion failed; fallback to plain extraction', e);
+                            }
+                        }
+                    }
+                }
+                if (!text) {
+                    try { text = clipboard.getData('text/plain'); } catch {}
+                    if (text) sourceType = sourceType || 'plain';
+                }
+                if (!text) { log.info('no usable data extracted'); return; }
+
+                // Trim trailing blank lines that some HTML sources append
+                text = text.replace(/\n{3,}$/,'\n\n');
+
+                if (typeof formatMarkdownInline === 'function') {
+                    try { text = await formatMarkdownInline(text); } catch (e) { log.warn('formatMarkdownInline failed', e); }
+                }
+
+                const model = editor.getModel();
+                if (!model) { log.warn('editor model unavailable'); return; }
+                const selection = editor.getSelection();
+                if (!selection) { log.warn('selection unavailable'); return; }
+
+                editor.executeEdits('markdown-paste', [{ range: selection, text, forceMoveMarkers: true }]);
+                log.info(`Inserted (${sourceType||'unknown'}) length=${text.length} via ${targetLabel}`);
+            } catch (err) {
+                log.err('handler crashed, letting default proceed', err);
+            }
+        };
+
+        // Attach immediate known targets
+        addTarget(container, 'container');
+        addTarget(domNode, 'domNode');
+        addTarget(window, 'window'); // capture global as ultimate fallback
+
+        // Discover hidden textarea asynchronously (Monaco creates it slightly later)
+        function attachTextareaWithRetry(attempt=0) {
+            const ta = findHiddenTextarea();
+            if (ta) { addTarget(ta, 'hidden-textarea'); return; }
+            if (attempt < 20) setTimeout(() => attachTextareaWithRetry(attempt+1), 50);
+        }
+        attachTextareaWithRetry();
+
+        // MutationObserver as an extra safety net if textarea appears much later
+        if (container) {
+            const mo = new MutationObserver(() => {
+                const ta = findHiddenTextarea();
+                if (ta) { addTarget(ta, 'hidden-textarea(mo)'); mo.disconnect(); }
+            });
+            mo.observe(container, { childList: true, subtree: true });
+        }
+
+        // Monaco onDidPaste (post event) for fallback logging / transformation override scenario
+        try {
+            editor.onDidPaste((e) => {
+                log.dbg('onDidPaste fired with range:', e.range, 'mode:', e.mode);
+                // If future: we can transform already-inserted content here by editing range.
+            });
+        } catch {}
+
+        // Override keybinding to reduce race (still keep user expectation)
+        try {
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KEY_V, () => {/* noop - DOM listener handles */});
+        } catch (e) { log.dbg('addCommand override failed (non-fatal)', e); }
+
+        // Provide a simple toggle API on editor instance
+        editor.__markdownPasteToggle = function(state) {
+            enabled = state !== false; // default true
+            log.info('handler ' + (enabled ? 'enabled' : 'disabled'));
+        };
+
+        // Ensure focus so selection exists for first paste
+        editor.focus();
+        log.info('Markdown paste handler installed (multi-target)');
+    }
+
 </script>
 </body>
 </html>
