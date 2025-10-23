@@ -51,7 +51,7 @@ body {
     transition: background 0.2s, transform 0.1s;
     margin: 10px;
 }
-.sticky-format { float: left; z-index: 100; }
+.sticky-format { float: right; z-index: 100; }
 .sticky-copy { float: right; }
 .sticky-copy:hover, .sticky-format:hover { background: rgba(255, 255, 255, 0.3); transform: scale(1.05); }
 .sticky-copy:active, .sticky-format:active { transform: scale(0.98); }
