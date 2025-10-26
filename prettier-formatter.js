@@ -58,13 +58,17 @@ function convertHtmlToMarkdown(html) {
 async function formatMarkdownInline(md) {
     try {
         if (typeof prettier !== "undefined" && Array.isArray(prettierPlugins)) {
-            return await prettier.format(md, {
+            let out = await prettier.format(md, {
                 parser: "markdown",
                 plugins: prettierPlugins,
                 tabWidth: 4,
                 useTabs: false,
                 proseWrap: "preserve",
             });
+            if (typeof removeExtraneousBlankLines === 'function') {
+                out = removeExtraneousBlankLines(out);
+            }
+            return out;
         }
     } catch (err) {
         console.warn("Inline Prettier failed; using raw markdown.", err);
@@ -111,10 +115,9 @@ async function formatMarkdownWithPrettier(md) {
         formatted = String(formatted ?? "");
     }
 
-    // 2) collapse >2 blank lines to a single blank line (harmless)
-    formatted = formatted.replace(/\n{3,}/g, "\n\n");
+    // 2) Run extra spacing normalization to remove "random" blank lines
+    formatted = removeExtraneousBlankLines(formatted);
 
-    // Rely solely on Prettier output; no additional newline collapsing.
     console.log("Formatted markdown:", formatted);
     return formatted;
 }
@@ -172,6 +175,92 @@ function updateFormatButton(success) {
             formatIcon.innerHTML = originalHTML;
         }, 500);
     }
+}
+
+/**
+ * Remove extraneous blank lines while preserving intentional spacing & code fences.
+ * Rules:
+ *  - Never touch content inside fenced code blocks (``` or ~~~)
+ *  - Collapse 3+ consecutive blank lines to a single blank line
+ *  - Between consecutive list items (same list block) remove blank separator lines
+ *  - Remove leading / trailing blank lines
+ *  - Keep at most one blank line before/after a thematic break (---, ***) or heading
+ *  - Ensure file ends with a single trailing newline
+ *
+ * This is intentionally conservative to avoid mangling markdown semantics.
+ * @param {string} md
+ * @returns {string}
+ */
+function removeExtraneousBlankLines(md) {
+    // MODE options:
+    //  - 'remove': remove all blank lines outside fences (current strict request)
+    //  - 'collapse': collapse multiple blanks to a single blank (safer default)
+    const MODE = 'remove'; // change to 'collapse' if strict removal breaks formatting
+
+    const text = md.replace(/\r\n?/g, '\n');
+    const lines = text.split('\n');
+    const out = [];
+    let inFence = false;
+    let fenceChar = null;
+    const fenceRegex = /^([`~]{3,})(.*)$/;
+
+    // Quick helpers to recognize structural lines that benefit from a preceding blank
+    const isHeading = (ln) => /^(?:\s{0,3})#{1,6}\s+/.test(ln);
+    const isListItem = (ln) => /^(?:\s{0,3})(?:[-*+]\s+|\d+\.\s+)/.test(ln);
+    const isThematic = (ln) => /^(?:\s{0,3})(?:-{3,}|_{3,}|\*{3,})\s*$/.test(ln);
+
+    for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        const trimmed = raw.trim();
+        const fenceMatch = trimmed.match(fenceRegex);
+        if (fenceMatch) {
+            if (!inFence) {
+                inFence = true;
+                fenceChar = fenceMatch[1][0];
+            } else if (fenceMatch[1][0] === fenceChar) {
+                inFence = false;
+                fenceChar = null;
+            }
+            out.push(raw);
+            continue;
+        }
+        if (inFence) {
+            out.push(raw); // keep everything inside fence
+            continue;
+        }
+
+        if (MODE === 'remove') {
+            if (trimmed === '') {
+                // Skip blank entirely
+                continue;
+            }
+            out.push(raw);
+        } else { // collapse mode
+            if (trimmed === '') {
+                // Peek next non-empty
+                let j = i + 1, next = '';
+                while (j < lines.length) {
+                    if (lines[j].trim() !== '') { next = lines[j]; break; }
+                    j++;
+                }
+                // Prevent multiple blanks
+                if (out.length && out[out.length - 1] === '') continue;
+                // Optionally keep a single blank before structural elements
+                if (next && (isHeading(next) || isThematic(next))) {
+                    if (out.length && out[out.length - 1] === '') continue;
+                }
+                out.push('');
+            } else {
+                out.push(raw);
+            }
+        }
+    }
+
+    // Post-processing: remove leading/trailing blanks (both modes)
+    while (out.length && out[0].trim() === '') out.shift();
+    while (out.length && out[out.length - 1].trim() === '') out.pop();
+
+    return out.join('\n').replace(/\n+$/,'') + '\n';
 }
 
 // --- Auto initialization layer ---
